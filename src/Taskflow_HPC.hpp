@@ -146,6 +146,8 @@
 
  #define _param(...) _parameters=Frontend::parameters(__VA_ARGS__)
 
+ 
+
 //================================================================================================================================
 // Get Information System CPU and GPU
 //================================================================================================================================
@@ -1695,6 +1697,7 @@ class Task
         bool        M_qViewInfo;
         bool        M_qSave;
         long int    M_time_laps;
+        bool        M_qDeviceReset;
 
         std::vector<int>  M_ListGraphDependencies;
 
@@ -1725,13 +1728,15 @@ class Task
         Task();
         ~Task();
 
-        void setSave        (bool b)        {  M_qSave = b; }
-        void setViewInfo    (bool b)        {  M_qViewInfo = b; }
-        bool isSave         () const        {  return(M_qSave); }
-        void setFileName    (std::string s) {  M_FileName=s; }
+        void setSave         (bool b)        {  M_qSave = b; }
+        void setViewInfo     (bool b)        {  M_qViewInfo = b; }
+        void setDeviceReset  (bool b)        {  M_qDeviceReset = b; }
+        bool isSave          () const        {  return(M_qSave); }
+        bool isDeviceReset   () const        {  return(M_qDeviceReset); }
+        void setFileName     (std::string s) {  M_FileName=s; }
 
-        void setDeviceHIP   (int v);
-        void setDeviceCUDA  (int v);
+        void setDeviceHIP    (int v);
+        void setDeviceCUDA   (int v);
            
 
 
@@ -1739,6 +1744,14 @@ class Task
 
         template<typename Kernel, typename Input, typename Output>
             void add(const Kernel& kernel_function,
+                     int numElems,
+                     int iBegin,int iEnd,
+                     Input* buffer,
+                     Output* hostbuffer,
+                     std::vector<int> links);
+
+        template<typename Kernel, typename Input, typename Output>
+            void add_cuda(const Kernel& kernel_function,
                      int numElems,
                      int iBegin,int iEnd,
                      Input* buffer,
@@ -1771,6 +1784,7 @@ Task::Task()
     M_time_laps    = 0;
     M_FileName     = "NoName";
     M_qSave        = true;
+    M_qDeviceReset = true;
     M_ListGraphDependencies.clear();
 }
 
@@ -1998,6 +2012,99 @@ template<typename Kernel, typename Input, typename Output>
 }
 
 
+template<typename Kernel, typename Input, typename Output>
+    void Task::add_cuda(const Kernel& kernel_function,
+                                int numElems,
+                                int iBegin,int iEnd,
+                                Input* buffer,
+                                Output* hostbuffer,
+                                std::vector<int> links)
+{            
+    #ifdef UseCUDA  
+        bool qFlag=false;
+        //BEGIN::Init new node
+        cudaGraphNode_t newKernelNode; M_cudaGraphNode_t.push_back(newKernelNode);
+        memset(&cuda_nodeParams, 0, sizeof(cuda_nodeParams));
+
+        if (M_qViewInfo) { std::cout<<"<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"<<"\n"; }
+        //if (M_qViewInfo) { std::cout<<"[INFO]: M_cudaGraphNode_t="<<M_cudaGraphNode_t.size()<<" : "<<M_cudaGraphNode_t[M_cudaGraphNode_t.size()-1]<<"\n"; }
+        if (M_qViewInfo) { std::cout<<"[INFO]: Num Graph Node = "<<M_cudaGraphNode_t.size()<<"\n"; }
+
+        //CRTL range
+        if (iEnd>numElems) { iEnd=numElems; }
+        if (iBegin<0)      { iBegin=0; }
+
+        //printf("[%x]\n",M_cudaGraphNode_t[M_cudaGraphNode_t.size()-1]);
+
+        cuda_nodeParams.func   =  (void *)OP_IN_KERNEL_GRAPH_LAMBDA_GPU_1D<Kernel,Input>;
+        cuda_nodeParams.gridDim        = dim3(M_numBlocksGPU, 1, 1);
+        cuda_nodeParams.blockDim       = dim3(M_nThPerBckGPU, 1, 1);
+        cuda_nodeParams.sharedMemBytes = 0;
+        void *inputs[4];
+        inputs[0]                     = (void *)&kernel_function;
+        inputs[1]                     = (void *)&buffer;
+        inputs[2]                     = (void *)&iBegin;
+        inputs[3]                     = (void *)&iEnd;
+        cuda_nodeParams.kernelParams   = inputs;
+        
+        if (M_q_graph) { cuda_nodeParams.extra          = NULL; }
+        else           { cuda_nodeParams.extra          = nullptr; }
+        //END::Init new node
+
+        //BEGIN::Dependencies part
+        unsigned int nbElemLinks               = links.size();
+        unsigned int nbElemKernelNode          = M_cudaGraphNode_t.size();
+        std::vector<cudaGraphNode_t> dependencies;
+        M_ListGraphDependencies.push_back(M_cudaGraphNode_t.size()-1);
+        for (int i = 0; i < nbElemLinks; i++) { 
+            if (links[i]==-1) { qFlag=true; }
+            if (links[i]!=-1) {
+                dependencies.push_back(M_cudaGraphNode_t[links[i]]); 
+                M_ListGraphDependencies.push_back(links[i]);
+            }
+        }
+
+        if (M_qViewInfo) {
+            std::cout<<"[INFO]: Nb Elem Links  = "<<nbElemLinks<<"\n";
+            std::cout<<"[INFO]: Link dependencies with >>> [";
+                for (auto v: dependencies) { std::cout << v << " "; } std::cout<<"] <<<\n";
+        }
+        //END::Dependencies part
+
+        //BEGIN::Add Node to kernel GPU
+        if (M_q_graph) { cudaGraphAddKernelNode(&M_cudaGraphNode_t[M_cudaGraphNode_t.size()-1],cuda_graph,dependencies.data(),nbElemLinks, &cuda_nodeParams); }
+        else           { cudaGraphAddKernelNode(&M_cudaGraphNode_t[M_cudaGraphNode_t.size()-1],cuda_graph,nullptr,0, &cuda_nodeParams); }
+        //END::Add Node to kernel GPU
+
+        M_q_graph=true;
+
+        //BEGIN::Final node kernel GPU
+        if (qFlag)
+        {
+            if (M_qViewInfo) {
+                std::cout<<"[INFO]:"<<"\n";
+                std::cout<<"[INFO]: List >>> [";
+                for (auto v: M_cudaGraphNode_t) { std::cout << v << " "; } std::cout<<"] <<<\n";
+            }
+            cudaGraphNode_t copyBuffer;
+            if (M_qViewInfo) { std::cout<<"[INFO]: Last M_cudaGraphNode_t="<<M_cudaGraphNode_t.size()<<" : "<<M_cudaGraphNode_t[M_cudaGraphNode_t.size()-1]<<"\n"; }
+            std::vector<cudaGraphNode_t> finalDependencies = { M_cudaGraphNode_t[ M_cudaGraphNode_t.size()-1] };
+            cudaGraphAddMemcpyNode1D(&copyBuffer,
+                                    cuda_graph,
+                                    dependencies.data(),
+                                    dependencies.size(),
+                                    hostbuffer,
+                                    buffer,
+                                    numElems  * sizeof(typename std::decay<decltype(hostbuffer)>::type),
+                                    cudaMemcpyDeviceToHost);
+        }
+        //END::Final node kernel GPU
+
+        dependencies.clear();
+     #endif
+}
+
+
 
 void Task::run()
 {
@@ -2033,13 +2140,13 @@ void Task::close()
             hipGraphExecDestroy     (hip_graphExec);
             hipGraphDestroy         (hip_graph);
             hipStreamDestroy        (hip_graphStream);
-            //hipDeviceReset          ();   // Not be used if Spex Hip AMD activated
+            if (M_qDeviceReset)     { hipDeviceReset(); }   // Not be used if Spex Hip AMD activated
         #endif
         #ifdef UseCUDA
             cudaGraphExecDestroy     (cuda_graphExec);
             cudaGraphDestroy         (cuda_graph);
             cudaStreamDestroy        (cuda_graphStream);
-            //cudaDeviceReset          ();   // Not be used if Spex Hip AMD activated
+            if (M_qDeviceReset)      { cudaDeviceReset(); }  // Not be used if Spex Cuda NVidia activated
         #endif
         if (M_qViewInfo) { std::cout<<"[INFO]: Close Graph Hip"<<"\n"; }
     }
