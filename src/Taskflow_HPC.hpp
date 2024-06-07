@@ -383,6 +383,12 @@ void getInformationSystem()
 constexpr auto& _parameters = NA::identifier<struct parameters_tag>;
 constexpr auto& _task = NA::identifier<struct task_tag>;
 
+
+constexpr auto& _kernel = NA::identifier<struct kernel_tag>;
+constexpr auto& _range  = NA::identifier<struct range_tag>;
+constexpr auto& _links  = NA::identifier<struct links_tag>;
+
+
 namespace Backend{
 
     template<typename ...T, size_t... I>
@@ -644,7 +650,8 @@ class Task
         bool M_qEmptyTask;                                     // variable indicator if there is no task
         bool M_qFlagDetachAlert;                               // flag internal variable indicator for activation of the detach module
         
-        SpTaskGraph<SpSpeculativeModel::SP_NO_SPEC> M_mytg;    // Specx TaskGraph function 
+        //SpTaskGraph<SpSpeculativeModel::SP_NO_SPEC> M_mytg;    // Specx TaskGraph function 
+        SpTaskGraph<SpSpeculativeModel::SP_MODEL_1> M_mytg;    // Specx TaskGraph function 
         SpComputeEngine M_myce;                                // Specx engine function 
 
         std::vector<int>               M_idType;                // This vector saves the thread type according to the task id number
@@ -800,6 +807,10 @@ class Task
 
         template <class ClassFunc> void execOnWorkers(ClassFunc&& func) { M_myce.execOnWorkers(std::forward<ClassFunc>(func)); } //Execute a ClassFunc on workers
   
+        void setSpeculationTest(std::function<bool(int,const SpProbability&)> inFormula){
+            if (M_numTypeTh==3) { M_mytg.setSpeculationTest(std::move(inFormula)); }
+        }
+
         template <typename ... Ts>
         void add( Ts && ... ts ); // This main function allows you to add a task
 
@@ -1784,7 +1795,7 @@ Task::Task()
     M_time_laps    = 0;
     M_FileName     = "NoName";
     M_qSave        = true;
-    M_qDeviceReset = true;
+    M_qDeviceReset = false;
     M_ListGraphDependencies.clear();
 }
 
@@ -2171,6 +2182,9 @@ class PtrTask:public Task
 
         template<typename Kernel>
             void add(const Kernel& kernel_function,int iBegin,int iEnd,std::vector<int> links);
+
+        template <typename ... Ts>
+            void addTest( Ts && ... ts); 
 };
 
 
@@ -2215,8 +2229,141 @@ void PtrTask<T>::add(const Kernel& kernel_function,int iBegin,int iEnd,std::vect
 }
 
 
+template<typename T>
+template <typename ... Ts>
+void PtrTask<T>::addTest( Ts && ... ts)
+{
+    //(_kernel=(op1),_range=(0,nbElements),_links=(0)); 
+
+    auto args = NA::make_arguments( std::forward<Ts>(ts)... );
+    auto && kernel = args.get(_kernel);
+    auto && range  = args.get(_range);
+    auto && links  = args.get(_links);
+    auto tp1=std::make_tuple( kernel );
+    auto tp2=std::make_tuple( range );
+    auto tp3=std::make_tuple(links);
+    auto tp=std::tuple_cat(tp1,tp2,tp3);
+
+    //CTRL
+    int Nbtp1=std::tuple_size<decltype(tp1)>::value;
+    int Nbtp2=std::tuple_size<decltype(tp2)>::value;
+    int Nbtp3=std::tuple_size<decltype(tp3)>::value;
+    int Nbtp=std::tuple_size<decltype(tp)>::value;
+    std::cout <<"==> Size Parameters tp1..3"<<Nbtp1<<" "<<Nbtp2<<" "<<Nbtp3<< "tp="<<Nbtp<<std::endl;
+
+  
+
+    #ifdef UseHIP
+        //std::apply(add,tp);
+        //std::apply([&](auto &&... args) { add(args...); },tp);
+    #endif
+    
+}
+
+
 //--------------------------------------------------------------------------------------------------------------------------------
 } //End namespace
+
+
+
+namespace LEMGPUI {
+
+struct Task {
+    enum class state_t      { capture, update };
+    void add_kernel_node    (size_t key, hipKernelNodeParams params, hipStream_t s);
+    void update_kernel_node (size_t key, hipKernelNodeParams params);
+    state_t state()         { return _state; }
+    ~Task();
+
+private:
+    std::unordered_map<size_t, hipGraphNode_t> _node_map;
+    state_t _state;
+    hipGraph_t _graph;
+    hipGraphExec_t _graph_exec;
+    bool _instantiated = false;
+    static void begin_capture(hipStream_t s);
+    void end_capture  (hipStream_t s);
+    void launch_graph (hipStream_t s);
+
+public:
+    bool _always_recapture = false;
+    template<class Obj>
+    void wrap(Obj &o, hipStream_t s) {
+    if (!_always_recapture && _instantiated) {
+        // If the graph has been instantiated, set the state to update
+        _state = state_t::update;
+        o(*this, s);
+    } else {
+        // If the graph has not been instantiated, set the state to capture
+        _state = state_t::capture;
+        begin_capture(s);
+        o(*this, s);
+        end_capture(s);
+    }
+    launch_graph(s);
+  }
+};
+
+
+Task::~Task() {
+    if (_instantiated) {
+        hipGraphDestroy(_graph);
+        hipGraphExecDestroy(_graph_exec);
+        _instantiated = false;
+    }
+}
+
+void Task::begin_capture(hipStream_t s) { hipStreamBeginCapture(s, hipStreamCaptureModeGlobal); }
+
+void Task::end_capture(hipStream_t s) {
+    if (_instantiated) { hipGraphDestroy(_graph); }
+    hipStreamEndCapture(s, &_graph);
+    bool need_instantiation;
+
+    if (_instantiated) {
+        hipGraphExecUpdateResult updateResult;
+        hipGraphNode_t errorNode;
+        hipGraphExecUpdate(_graph_exec, _graph, &errorNode, &updateResult);
+        if (_graph_exec == nullptr || updateResult != hipGraphExecUpdateSuccess) {
+            hipGetLastError();
+            if (_graph_exec != nullptr) { hipGraphExecDestroy(_graph_exec); }
+            need_instantiation = true;
+        } else {
+            need_instantiation = false;
+        }
+    } else {
+        need_instantiation = true;
+    }
+
+    if (need_instantiation) {
+        hipGraphInstantiate(&_graph_exec, _graph, nullptr, nullptr, 0);
+    }
+    _instantiated = true;
+}
+
+void Task::launch_graph(hipStream_t s) {
+    if (_instantiated) { hipGraphLaunch(_graph_exec, s);}
+}
+
+void Task::add_kernel_node(size_t key, hipKernelNodeParams params, hipStream_t stream)
+{
+    hipStreamCaptureStatus capture_status;
+    hipGraph_t graph;
+    const hipGraphNode_t *deps;
+    size_t dep_count;
+    hipStreamGetCaptureInfo_v2(stream, &capture_status, nullptr, &graph, &deps, &dep_count);
+    hipGraphNode_t new_node;
+    hipGraphAddKernelNode(&new_node, graph, deps, dep_count, &params);
+    _node_map[key] = new_node;
+    hipStreamUpdateCaptureDependencies(stream, &new_node, 1, 1);
+}
+
+void Task::update_kernel_node(size_t key, hipKernelNodeParams params)
+{
+    hipGraphExecKernelNodeSetParams(_graph_exec, _node_map[key], &params);
+}
+
+} //End namespace LEMGPUI
 
 
 
