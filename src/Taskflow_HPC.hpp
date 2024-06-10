@@ -714,7 +714,12 @@ class Task
 
     public:
 
-        
+        //BEGIN::No copy and no move
+        Task(const Task&) = delete;
+        Task(Task&&) = delete;
+        Task& operator=(const Task&) = delete;
+        Task& operator=(Task&&) = delete;
+        //END::No copy and no move
 
         //BEGIN::Small functions and variables to manage initialization parameters
         
@@ -939,28 +944,28 @@ void Task::init()
 
 void Task::subTask(const int nbThread,const int nbBlocks,int M_numTypeThread)
 {
-            M_numBlocksGPU=nbBlocks;
-            M_nbTh=nbThread;
-            M_numTypeTh = M_numTypeThread;
-            M_idk=0; M_numTaskStatus.clear(); M_qDetach=0; M_nbThreadDetach=0;
-            M_idType.clear(); 
-            M_t_begin   = std::chrono::steady_clock::now();
-            M_qDeferred = false;
-            M_qReady    = false;
+    M_numBlocksGPU=nbBlocks;
+    M_nbTh=nbThread;
+    M_numTypeTh = M_numTypeThread;
+    M_idk=0; M_numTaskStatus.clear(); M_qDetach=0; M_nbThreadDetach=0;
+    M_idType.clear(); 
+    M_t_begin   = std::chrono::steady_clock::now();
+    M_qDeferred = false;
+    M_qReady    = false;
                 
-            if (M_numTypeTh==0) { } // No Thread
-            if (M_numTypeTh==1) { } // multithread
-            if (M_numTypeTh==2) { } // std::async
-            if (M_numTypeTh==3) { M_mytg.computeOn(M_myce); } // Specx
+    if (M_numTypeTh==0) { } // No Thread
+    if (M_numTypeTh==1) { } // multithread
+    if (M_numTypeTh==2) { } // std::async
+    if (M_numTypeTh==3) { M_mytg.computeOn(M_myce); } // Specx
 
-            if (M_numTypeTh==10) { pthread_attr_init(&M_mypthread_attr_t); } //pthread
+    if (M_numTypeTh==10) { pthread_attr_init(&M_mypthread_attr_t); } //pthread
 
-            if (M_numTypeTh==33) { 
-                #ifdef COMPILE_WITH_HIP
-                    //static_assert(SpDeviceDataView<std::vector<int>>::MoveType == SpDeviceDataUtils::DeviceMovableType::STDVEC,"should be stdvec"); //will see after
-                    M_mytg.computeOn(M_myce);
-                #endif
-             } // Specx GPU
+    if (M_numTypeTh==33) { 
+        #ifdef COMPILE_WITH_HIP
+            //static_assert(SpDeviceDataView<std::vector<int>>::MoveType == SpDeviceDataUtils::DeviceMovableType::STDVEC,"should be stdvec"); //will see after
+            M_mytg.computeOn(M_myce);
+        #endif
+    } // Specx GPU
 }
 
 int Task::getNbThreadPerBlock(int i)
@@ -2191,13 +2196,13 @@ class PtrTask:public Task
 template<typename T>
 PtrTask<T>::PtrTask()
 {
-
+    //...
 }
 
 template<typename T>
 PtrTask<T>::~PtrTask()
 {
-
+    //...
 }
 
 template<typename T>
@@ -2288,20 +2293,7 @@ private:
 public:
     bool _always_recapture = false;
     template<class Obj>
-    void wrap(Obj &o, hipStream_t s) {
-    if (!_always_recapture && _instantiated) {
-        // If the graph has been instantiated, set the state to update
-        _state = state_t::update;
-        o(*this, s);
-    } else {
-        // If the graph has not been instantiated, set the state to capture
-        _state = state_t::capture;
-        begin_capture(s);
-        o(*this, s);
-        end_capture(s);
-    }
-    launch_graph(s);
-  }
+    void wrap(Obj &o, hipStream_t s);
 };
 
 
@@ -2339,6 +2331,21 @@ void Task::end_capture(hipStream_t s) {
         hipGraphInstantiate(&_graph_exec, _graph, nullptr, nullptr, 0);
     }
     _instantiated = true;
+}
+
+template<class Obj>
+void Task::wrap(Obj &o, hipStream_t s) 
+{
+    if (!_always_recapture && _instantiated) {
+        _state = state_t::update;
+        o(*this, s);
+    } else {
+        _state = state_t::capture;
+        begin_capture(s);
+        o(*this, s);
+        end_capture(s);
+    }
+    launch_graph(s);
 }
 
 void Task::launch_graph(hipStream_t s) {
