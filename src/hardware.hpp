@@ -1,77 +1,37 @@
 
 
-
-//#define COMPILE_WITH_CUDA
-//#define UseCUDA
-#define COMPILE_WITH_HIP
-#define UseHIP
-
-//#define USE_MPI
-#define USE_OpenMP
-
-
-//Links HIP
-#ifdef COMPILE_WITH_HIP
-    #include "hip/hip_runtime.h"
-    #include "hip/hip_runtime_api.h"
-#endif
-
-//Links CUDA
-#ifdef COMPILE_WITH_CUDA
-    #include "cuda_runtime.h"
-    #include "cuda.h"
-#endif
-
-
-//Links mpi
-#ifdef USE_MPI
-    #include <mpi.h>
-#endif
-
-//Links omp
-#ifdef USE_OpenMP
-	#include <omp.h>
-#endif
-
-
-#define HIP_KERNEL_NAME(...) __VA_ARGS__
-
-#define HIP_CHECK(command) {               \
-  hipError_t status = command;             \
-  if (status!=hipSuccess) {                \
-    std::cerr <<"Error: HIP reports "<< hipGetErrorString(status)<< std::endl; \
-    std::abort(); } }
-
-
-#ifdef NDEBUG
-    #define HIP_ASSERT(x) x
-#else
-    #define HIP_ASSERT(x) (assert((x)==hipSuccess))
-#endif
-
-
-#define CUDA_CHECK(command) {               \
-  cudaError_t status = command;             \
-  if (status!=hipSuccess) {                \
-    std::cerr <<"Error: CUDA reports "<< cudaGetErrorString(status)<< std::endl; \
-    std::abort(); } }
-
-
-#ifdef NDEBUG
-    #define CUDA_ASSERT(x) x
-#else
-    #define CUDA_ASSERT(x) (assert((x)==cudaSuccess))
-#endif
-
-
-
 //================================================================================================================================
-// Get Information System CPU and GPU
+// Get Information System CPU/GPU Hardware
 //================================================================================================================================
 
-namespace HARD {
+namespace Hard {
 
-void readFileViewInformation(char *filename) 
+
+class Hardware
+{
+    private:
+        void readFileViewInformation(char *filename);
+        void scanInformationSystem();
+        void getInformationCPU();
+        void getInformationGPU();
+        void getShortInformationGPU();
+        void getHipInformation();
+        void getCudaInformation();
+        void getOpenMPInformation();
+    public:
+        Hardware();
+        ~Hardware();
+        void getInformationSystem();
+        
+        //void getMpiInformation(int argc, char *argv[]);
+};
+
+
+
+Hardware::Hardware() {}
+Hardware::~Hardware() {}
+
+void Hardware::readFileViewInformation(char *filename) 
 {
 	FILE* FICH = NULL;
     int c = 0;
@@ -79,8 +39,7 @@ void readFileViewInformation(char *filename)
     if (FICH != NULL) { do { c = fgetc(FICH); printf("%c",c); } while (c != EOF); fclose(FICH); }
 }
 
-
-void scanInformationSystem()
+void Hardware::scanInformationSystem()
 {
 	int Value;
 	std::cout <<"\n";
@@ -91,29 +50,31 @@ void scanInformationSystem()
     std::cout <<"\n";
 }
 
-void getInformationCPU()
+void Hardware::getInformationCPU()
 {
 	std::cout <<"\n";
 	std::cout << "[INFO]: Information CPU"<<"\n";
     std::cout <<"\n";
-	readFileViewInformation("InfoSystemCPU.txt");
+	readFileViewInformation((char*)"InfoSystemCPU.txt");
 	std::cout <<"\n";
     std::cout <<"\n";
 }
 
-void getInformationGPU()
+void Hardware::getInformationGPU()
 {
 	std::cout <<"\n";
 	std::cout << "[INFO]: Information GPU"<<"\n";
     std::cout <<"\n";
-	readFileViewInformation("InfoSystemGPU.txt");
+	readFileViewInformation((char*)"InfoSystemGPU.txt");
 	std::cout <<"\n";
     std::cout <<"\n";
 }
 
-#ifdef USE_MPI
-void getMpiInformation(int argc, char *argv[])
+
+/*
+void Hardware::getMpiInformation(int argc, char *argv[])
 {
+    #ifdef USE_MPI
 	//BEGIN::INFO MPI
 	bool qFullInfoSystem=false;
     MPI_Init(NULL, NULL);
@@ -136,24 +97,28 @@ void getMpiInformation(int argc, char *argv[])
     std::cout << "[INFO]: MPI Rank: "<<world_rank<<" out of "<<world_size<<"\n";
     MPI_Finalize();
 	//END::INFO MPI
+    #endif
 }
-#endif
+*/
 
-#ifdef USE_OpenMP
-void getOpenMPInformation()
+
+void Hardware::getOpenMPInformation()
 {
+    #ifdef USE_OpenMP
     std::cout << "[INFO]: OpenMP Nb num procs: "<<omp_get_num_procs( )<< "\n";
     std::cout << "[INFO]: OpenMP Nb max threads: "<<omp_get_max_threads()<< "\n";
+    #endif
 }
-#endif
 
-void getShortInformationGPU()
+
+void Hardware::getShortInformationGPU()
 {
 	int deviceCount=0;
 	std::cout <<"\n";
 	std::cout << "[INFO]: Information GPU"<<"\n";
 
-	#ifdef COMPILE_WITH_HIP && UseHIP
+	//#ifdef COMPILE_WITH_HIP && UseHIP
+    #if defined(COMPILE_WITH_HIP) && defined(UseHIP)
 		hipGetDeviceCount(&deviceCount);
 		if (deviceCount>0) {
 			std::cout << "[INFO]: Number of available GPUs AMD: " << deviceCount << "\n";
@@ -164,6 +129,7 @@ void getShortInformationGPU()
 		}
 	#endif
 
+    //#if defined(COMPILE_WITH_CUDA) && defined(UseCUDA)
     #if defined(COMPILE_WITH_CUDA) && defined(UseCUDA)
 		cudaGetDeviceCount(&deviceCount);
 		if (deviceCount>0) {
@@ -179,7 +145,7 @@ void getShortInformationGPU()
 }
 
 
-void getHipInformation()
+void Hardware::getHipInformation()
 {
   //BEGIN::INFO HIP AMD
      #if defined(COMPILE_WITH_HIP) && defined(UseHIP)
@@ -223,7 +189,7 @@ void getHipInformation()
     #endif
 }
 
-void getCudaInformation()
+void Hardware::getCudaInformation()
 {
     //Nota: no code fusion because if hybrid CUDA and HIP system used
     //BEGIN::INFO CUDA NVIDIA
@@ -269,19 +235,21 @@ void getCudaInformation()
 }
 
 
-void getInformationSystem()
+void Hardware::getInformationSystem()
 {
     std::cout<<"[INFO]: ======================================================================================== "<<"\n";
     std::cout<<"[INFO]: Get Information System "<<"\n";
     getInformationCPU();
     scanInformationSystem();
     getInformationGPU();
+    getShortInformationGPU();
     #if defined(COMPILE_WITH_HIP) && defined(UseHIP)
         getHipInformation();
     #endif
     #if defined(COMPILE_WITH_CUDA) && defined(UseCUDA)
         getCudaInformation();
     #endif
+    getOpenMPInformation();
     std::cout<<"[INFO]: ======================================================================================== "<<"\n";
     std::cout<<"[INFO]: "<<"\n";
 }

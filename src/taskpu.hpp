@@ -132,8 +132,6 @@
     #define CUDA_ASSERT(x) (assert((x)==cudaSuccess))
 #endif
 
-//#define _param(...) _parameters=parameters(__VA_ARGS__)
-//#define _param(...) _parameters=Frontend::parameters(__VA_ARGS__)
 
 #define _param(...) _parameters=Sbtask::parameters(__VA_ARGS__)
 
@@ -145,6 +143,8 @@
 #include "hardware.hpp"
 #include "taskgpu.hpp"
 #include "taskcpu.hpp"
+
+//links internal scheduling management
 
 //================================================================================================================================
 // THE END.

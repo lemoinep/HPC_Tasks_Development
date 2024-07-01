@@ -1,4 +1,20 @@
-
+template <typename T>
+int numSpecxFunctionAlpha(T& fcv)
+{
+    std::string s1=typeid(fcv).name(); int l=s1.length();
+    std::cout<<"s1="<<s1<<"\n";
+    if (l>1) {
+        if (s1.find("SpCallableType0EE") != std::string::npos) { return (1);  }           //"SpCpu"
+        else if (s1.find("SpCallableType2EE") != std::string::npos) { return (2);  }      //"SpHip"
+        else if (s1.find("SpCallableType1EE") != std::string::npos) { return (3);  }      //"SpCuda
+        else if (s1.find("SpArrayView") != std::string::npos) { return (20);  }           //SpArrayView
+        else if (s1.find("SpArrayAccessorIS1_EE") != std::string::npos) { return (21);  } //SpReadArray      
+        else if (s1.find("SpDataAccessMode0") != std::string::npos) { return (10);  }     //"SpRead
+        else if (s1.find("SpDataAccessMode1") != std::string::npos) { return (11);  }     //"SpWrite
+        else if (s1.find("SpDataAccessMode3") != std::string::npos) { return (12);  }     //SpCommutativeWrite
+    }
+    return (0);
+}
  
 //=======================================================================================================================
 // Meta function tools allowing you to process an expression defined in Task
@@ -78,6 +94,7 @@ namespace Sbtask{
     template<typename T>
     auto toSpDataSpecx( T && t )
     {
+        //numSpecxFunctionAlpha(std::forward<T>( t ));
         if constexpr ( std::is_const_v<std::remove_reference_t<T>> )
             return SpRead(std::forward<T>( t ));
         else
@@ -101,9 +118,11 @@ namespace Sbtask{
     {
         if constexpr ( std::is_const_v<std::remove_reference_t<T>> )
             return SpRead(std::forward<T>( t ));
+            //return (std::forward<T>( t ));
         else
             //return SpWrite(std::forward<T>( t ));
             return SpCommutativeWrite(std::forward<T>( t ));
+            //return (std::forward<T>( t ));
     }
 
     template<typename ...T, size_t... I>
@@ -184,8 +203,7 @@ class Task
 
         //END::GPU part
 
-
-        // variables indicatrices utilisées par les fonctions set et get. Voir les descriptions ci-dessous.
+        // indicator variables used by the set and get functions. See descriptions below.
         long int M_t_laps;
         bool M_qFirstTask;
         int  M_idk;
@@ -309,6 +327,12 @@ class Task
                     std::cout<<"[INFO]: WELCOME TO GPU:CUDA"<<"\n";
                     Subtask(nbThread,nbBlocks,M_numTypeThread);
                 }
+
+                explicit Task(const int nbThread,int M_numTypeThread):M_mytg(),M_myce(SpWorkerTeamBuilder::TeamOfCpuCudaWorkers()) // Class constructor in classic mode
+                {
+                    std::cout<<"[INFO]: WELCOME TO GPU:CUDA"<<"\n";
+                    Subtask(nbThread,1,M_numTypeThread);
+                }
             #endif
         #else
             explicit Task(const int nbThread,int M_numTypeThread):M_mytg(),M_myce(SpWorkerTeamBuilder::TeamOfCpuWorkers(nbThread)) // Class constructor in classic mode
@@ -365,7 +389,7 @@ class Task
         
         void run();                     // Execution of all added tasks. 
         void close();                   // Memory cleanup of all variables used before closing the class.
-        void debriefingTasks();         // Wrote a report on execution times and generated .dot .svg files regarding Specx and .csv to save the times.
+        void debriefing();              // Wrote a report on execution times and generated .dot .svg files regarding Specx and .csv to save the times.
         void getInformation();          // Provides all information regarding graphics cards (CUDA and HIP)
         void getGPUInformationError();  // Provides error types from the GPU (CUDA and HIP)
 
@@ -389,10 +413,10 @@ class Task
 
         #endif
 
-        #if defined(COMPILE_WITH_HIP) || defined(COMPILE_WITH_CUDA)
-
         template <class... ParamsTy>
-            void addTaskSpecxPureGPU(ParamsTy&&...params); 
+            void addTaskSpecxPure(ParamsTy&&...params);         
+
+        #if defined(COMPILE_WITH_HIP) || defined(COMPILE_WITH_CUDA)
 
         template <typename ... Ts>
             void addTaskSpecxGPU( Ts && ... ts); // This subfunction allows you to add a specx task
@@ -498,6 +522,8 @@ int Task::getNbThreadPerBlock(int i)
             return(devProp.maxThreadsPerBlock);
         }
     #endif
+
+    return(-1);
 }
 
 
@@ -622,19 +648,17 @@ void Task::run_cpu_1D(const Kernel& kernel_function, int n, const Input& in, Out
 #endif
 
 
-
-
+template <class... ParamsTy>
+void Task::addTaskSpecxPure(ParamsTy&&...params)
+{
+    if (M_qFirstTask) { M_t_begin = std::chrono::steady_clock::now(); M_qFirstTask=false;}
+    M_mytg.task(std::forward<ParamsTy>(params)...);
+    M_qEmptyTask=false;
+}
 
 
 
 #if defined(COMPILE_WITH_HIP) || defined(COMPILE_WITH_CUDA)
-
-template <class... ParamsTy>
-void Task::addTaskSpecxPureGPU(ParamsTy&&...params)
-{
-      M_mytg.task(std::forward<ParamsTy>(params)...);
-}
-
 
 template <typename ... Ts>
 void Task::addTaskSpecxGPU( Ts && ... ts)
@@ -643,23 +667,9 @@ void Task::addTaskSpecxGPU( Ts && ... ts)
     auto args = NA::make_arguments( std::forward<Ts>(ts)... );
     auto && task = args.get(_tasks);
     auto && parameters = args.get_else(_parameters,std::make_tuple());
-    auto tpSubtask=Sbtask::makeSpDataSpecxGPU( parameters );
-    auto LambdaExpression=std::make_tuple(task);
-    std::cout << "**************************"<<"\n";
-    if (isSpecxGPUFunctionBeta(std::get<0>(LambdaExpression))) { std::cout<<"YES Specx Function\n"; }
-    else { std::cout<<"NO Specx Function\n"; }
-    std::cout << "**************************"<<"\n";
-
-    if (!M_qDetach)
-    {
-       
-
-        usleep(0); std::atomic_int counter(0);
-    }
-    else
-    {
-        addTaskAsync(std::forward<Ts>(ts)...);
-    }
+    //auto && parameters = args.get(_parameters);
+    M_mytg.task(parameters,task);
+    usleep(0); std::atomic_int counter(0);
 }
 #endif
 
@@ -806,8 +816,7 @@ void Task::add( Ts && ... ts )
         break;
         case 3: addTaskSpecx(std::forward<Ts>(ts)...); //Specx
         break;
-        //case 33: addTaskSpecxGPU(std::forward<Ts>(ts)...); //Specx GPU
-        //break;
+
         #ifdef COMPILE_WITH_CXX_20
             case 4: addTaskjthread(std::forward<Ts>(ts)...); //std::jthread
             break;
@@ -828,7 +837,7 @@ void Task::add_GPU( Ts && ... ts)
     if (M_qDetach) { M_qFlagDetachAlert=true; M_nbThreadDetach++; }
     if (M_qFirstTask) { M_t_begin = std::chrono::steady_clock::now(); M_qFirstTask=false;}
     switch(M_numTypeTh) {
-        case 33: addTaskSpecxGPU(std::forward<Ts>(ts)...); //Specx GPU
+        case 33: addTaskSpecxPure(std::forward<Ts>(ts)...); //Specx GPU
         break;
     }
     M_qDetach=false;
@@ -1027,7 +1036,7 @@ void Task::close()
     M_idk=0;
 }
 
-void Task::debriefingTasks()
+void Task::debriefing()
 {
     M_t_laps=std::chrono::duration_cast<std::chrono::microseconds>(M_t_end - M_t_begin).count();
 
